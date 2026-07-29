@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime files
+*.log
+*.pid
+.cache/
+support-links.json
+shuffle-manifest.json
+shuffle-request.json
+
+# Captures and reverse-engineering files
+*.pcap
+*.pcapng
+*.bin
+*.exe
+*.dll
+
+# User media and generated video
+*.h264
+*.hevc
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.mkv
+*.avi
+
+# Packages and builds
+build/
+dist/
+*.zip
+
+# Editor files
+.vscode/
+.idea/
+*~
