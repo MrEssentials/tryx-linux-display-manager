@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 
 HOME = Path.home()
-VENV_PYTHON = HOME / "tryx-linux" / ".venv" / "bin" / "python3"
-LOOP_SCRIPT = HOME / "tryx_loop_media.py"
+APP_DIR = Path(__file__).resolve().parent
+VENV_PYTHON = APP_DIR / ".venv" / "bin" / "python3"
+LOOP_SCRIPT = APP_DIR / "tryx_loop_media.py"
 CACHE_DIR = HOME / ".cache" / "tryx-display-manager"
 PID_FILE = CACHE_DIR / "display-loop.pid"
 LOG_FILE = CACHE_DIR / "display-loop.log"

@@ -51,9 +51,10 @@ VID = 0x391A
 PID = 0x2011
 
 HOME = Path.home()
-TRYX_CLI = HOME / ".local" / "bin" / "tryx"
-TRYX_LOOP_MANAGER = HOME / "tryx-linux" / "tryx_loop_manager.py"
-TRYX_PLAYLIST_MANAGER = HOME / "tryx-linux" / "tryx_playlist_manager.py"
+APP_DIR = Path(__file__).resolve().parent
+TRYX_CLI = APP_DIR / "tryx"
+TRYX_LOOP_MANAGER = APP_DIR / "tryx_loop_manager.py"
+TRYX_PLAYLIST_MANAGER = APP_DIR / "tryx_playlist_manager.py"
 CACHE_DIR = HOME / ".cache" / "tryx-display-manager"
 RECENT_FILE = CACHE_DIR / "recent.txt"
 SAVED_MEDIA_FILE = CACHE_DIR / "saved-media.json"

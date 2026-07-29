@@ -1,125 +1,180 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 APP_DIR="$HOME/tryx-linux"
 VENV="$APP_DIR/.venv"
-SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKUP_DIR="$APP_DIR/backups/gui-$(date +%Y%m%d-%H%M%S)"
-TRYX_CLI="$HOME/.local/bin/tryx"
-LOOP_SCRIPT="$HOME/tryx_loop_media.py"
+SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+DESKTOP_DIR="$HOME/.local/share/applications"
 
-for required in \
-    "$TRYX_CLI" \
-    "$LOOP_SCRIPT" \
-    "$HOME/tryx_restart_media.py" \
-    "$HOME/tryx_upload.py" \
-    "$HOME/tryx_image.py" \
-    "$HOME/tryx_video_upload.py" \
-    "$HOME/tryx_select_media.py"
-do
-    if [ ! -f "$required" ]; then
-        echo "Missing required proven terminal file: $required" >&2
+APP_FILES=(
+    tryx_gui.py
+    tryx_loop_manager.py
+    tryx_playlist_manager.py
+    tryxctl.py
+    tryx_upload.py
+    tryx_image.py
+    tryx_video_upload.py
+    tryx_select_media.py
+    tryx_loop_media.py
+    tryx_restart_media.py
+    tryx_play.py
+)
+
+echo "Installing TRYX Linux Display Manager..."
+
+for file in "${APP_FILES[@]}" requirements.txt; do
+    if [ ! -f "$SOURCE_DIR/$file" ]; then
+        echo "Missing repository file: $SOURCE_DIR/$file" >&2
         exit 1
     fi
 done
 
-if [ ! -x "$VENV/bin/python3" ]; then
-    echo "Missing TRYX virtual environment: $VENV" >&2
-    exit 1
-fi
+if command -v apt-get >/dev/null 2>&1; then
+    packages=(
+        ffmpeg
+        python3
+        python3-venv
+        libxcb-cursor0
+        libxkbcommon-x11-0
+        libxcb-xinerama0
+        libxcb-image0
+        libxcb-keysyms1
+        libxcb-render-util0
+        libxcb-icccm4
+    )
 
-command -v ffmpeg >/dev/null || {
-    echo "ffmpeg is missing. Install it with: sudo apt install ffmpeg" >&2
-    exit 1
-}
-command -v ffprobe >/dev/null || {
-    echo "ffprobe is missing. Install it with: sudo apt install ffmpeg" >&2
-    exit 1
-}
+    missing_packages=()
 
-# Close only the GUI and obsolete experimental keeper. Do not touch any of the
-# known-good protocol/uploader scripts.
-pkill -f "$APP_DIR/tryx_gui.py" 2>/dev/null || true
-pkill -f tryx_image_keeper.py 2>/dev/null || true
-if [ -f "$APP_DIR/tryx_playlist_manager.py" ]; then
-    "$VENV/bin/python3" "$APP_DIR/tryx_playlist_manager.py" --stop >/dev/null 2>&1 || true
-fi
-rm -f "$HOME/.cache/tryx-display-manager/image-keeper.pid"
+    for package in "${packages[@]}"; do
+        if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+            | grep -q "install ok installed"; then
+            missing_packages+=("$package")
+        fi
+    done
 
-if command -v dpkg >/dev/null && ! dpkg -s libxcb-cursor0 >/dev/null 2>&1; then
-    echo "Installing the Qt X11 runtime dependency..."
-    sudo apt update
-    sudo apt install -y libxcb-cursor0 libxkbcommon-x11-0 libxcb-xinerama0
-fi
-
-mkdir -p "$APP_DIR" "$BACKUP_DIR"
-
-for existing in "$APP_DIR/tryx_gui.py" "$APP_DIR/tryx_loop_manager.py" "$APP_DIR/tryx_playlist_manager.py"; do
-    if [ -f "$existing" ]; then
-        cp -a "$existing" "$BACKUP_DIR/"
+    if [ "${#missing_packages[@]}" -gt 0 ]; then
+        echo "Installing required system packages:"
+        printf '  %s\n' "${missing_packages[@]}"
+        sudo apt-get update
+        sudo apt-get install -y "${missing_packages[@]}"
     fi
+else
+    for command in python3 ffmpeg ffprobe; do
+        if ! command -v "$command" >/dev/null 2>&1; then
+            echo "Missing required command: $command" >&2
+            exit 1
+        fi
+    done
+fi
+
+# Stop older background processes before replacing their files.
+if [ -x "$VENV/bin/python3" ]; then
+    if [ -f "$APP_DIR/tryx_playlist_manager.py" ]; then
+        "$VENV/bin/python3" \
+            "$APP_DIR/tryx_playlist_manager.py" \
+            --stop >/dev/null 2>&1 || true
+    fi
+
+    if [ -f "$APP_DIR/tryx_loop_manager.py" ]; then
+        "$VENV/bin/python3" \
+            "$APP_DIR/tryx_loop_manager.py" \
+            --stop >/dev/null 2>&1 || true
+    fi
+fi
+
+pkill -f "$APP_DIR/tryx_gui.py" 2>/dev/null || true
+
+mkdir -p "$APP_DIR" "$BIN_DIR" "$DESKTOP_DIR"
+
+for file in "${APP_FILES[@]}"; do
+    install -m 755 "$SOURCE_DIR/$file" "$APP_DIR/$file"
 done
 
-install -m 755 "$SOURCE_DIR/tryx_gui.py" "$APP_DIR/tryx_gui.py"
-install -m 755 "$SOURCE_DIR/tryx_loop_manager.py" "$APP_DIR/tryx_loop_manager.py"
-install -m 755 "$SOURCE_DIR/tryx_playlist_manager.py" "$APP_DIR/tryx_playlist_manager.py"
+install -m 644 \
+    "$SOURCE_DIR/requirements.txt" \
+    "$APP_DIR/requirements.txt"
 
-# Install GUI dependencies only when they are missing.
-if ! "$VENV/bin/python3" -c 'import PySide6' >/dev/null 2>&1; then
-    "$VENV/bin/python3" -m pip install PySide6
-fi
-if ! "$VENV/bin/python3" -c 'import usb.core' >/dev/null 2>&1; then
-    "$VENV/bin/python3" -m pip install pyusb
+if [ ! -x "$VENV/bin/python3" ]; then
+    echo "Creating Python virtual environment..."
+    python3 -m venv "$VENV"
 fi
 
-mkdir -p "$HOME/.local/share/applications"
-cat > "$HOME/.local/share/applications/tryx-display-manager.desktop" <<EOF
+echo "Installing Python dependencies..."
+"$VENV/bin/python3" -m pip install --upgrade pip
+"$VENV/bin/python3" -m pip install \
+    --requirement "$APP_DIR/requirements.txt"
+
+cat > "$APP_DIR/tryx" <<EOF
+#!/usr/bin/env bash
+exec "$VENV/bin/python3" "$APP_DIR/tryxctl.py" "\$@"
+EOF
+
+cat > "$APP_DIR/tryx-gui" <<EOF
+#!/usr/bin/env bash
+exec "$VENV/bin/python3" "$APP_DIR/tryx_gui.py" "\$@"
+EOF
+
+cat > "$APP_DIR/tryx-loop" <<EOF
+#!/usr/bin/env bash
+exec "$VENV/bin/python3" "$APP_DIR/tryx_loop_manager.py" "\$@"
+EOF
+
+cat > "$APP_DIR/tryx-shuffle" <<EOF
+#!/usr/bin/env bash
+exec "$VENV/bin/python3" "$APP_DIR/tryx_playlist_manager.py" "\$@"
+EOF
+
+chmod 755 \
+    "$APP_DIR/tryx" \
+    "$APP_DIR/tryx-gui" \
+    "$APP_DIR/tryx-loop" \
+    "$APP_DIR/tryx-shuffle"
+
+ln -sfn "$APP_DIR/tryx" "$BIN_DIR/tryx"
+ln -sfn "$APP_DIR/tryx-gui" "$BIN_DIR/tryx-gui"
+ln -sfn "$APP_DIR/tryx-loop" "$BIN_DIR/tryx-loop"
+ln -sfn "$APP_DIR/tryx-shuffle" "$BIN_DIR/tryx-shuffle"
+
+cat > "$DESKTOP_DIR/tryx-display-manager.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=TRYX Display Manager
-Comment=Upload, frame, loop, and shuffle pictures and videos on a TRYX display
-Exec=$VENV/bin/python3 $APP_DIR/tryx_gui.py
+Comment=Unofficial Linux display manager for compatible TRYX displays
+Exec=$BIN_DIR/tryx-gui
 Icon=video-display
 Terminal=false
 Categories=AudioVideo;Graphics;Utility;
 StartupNotify=true
 EOF
-chmod 644 "$HOME/.local/share/applications/tryx-display-manager.desktop"
 
-mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/tryx-gui" <<EOF
-#!/bin/bash
-exec "$VENV/bin/python3" "$APP_DIR/tryx_gui.py" "\$@"
-EOF
-chmod +x "$HOME/.local/bin/tryx-gui"
+chmod 644 "$DESKTOP_DIR/tryx-display-manager.desktop"
 
-cat > "$HOME/.local/bin/tryx-loop" <<EOF
-#!/bin/bash
-exec "$VENV/bin/python3" "$APP_DIR/tryx_loop_manager.py" "\$@"
-EOF
-chmod +x "$HOME/.local/bin/tryx-loop"
+# Permit ordinary desktop users to access the compatible USB device.
+if [ "${TRYX_SKIP_UDEV:-0}" != "1" ] \
+    && command -v sudo >/dev/null 2>&1 \
+    && [ -d /etc/udev/rules.d ]; then
 
-cat > "$HOME/.local/bin/tryx-shuffle" <<EOF
-#!/bin/bash
-exec "$VENV/bin/python3" "$APP_DIR/tryx_playlist_manager.py" "\$@"
-EOF
-chmod +x "$HOME/.local/bin/tryx-shuffle"
+    RULE_FILE="/etc/udev/rules.d/99-tryx-turris.rules"
+    RULE='SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="391a", ATTR{idProduct}=="2011", MODE="0660", GROUP="plugdev", TAG+="uaccess"'
 
-# The obsolete keeper is deliberately removed from the application directory.
-rm -f "$APP_DIR/tryx_image_keeper.py"
+    if [ ! -f "$RULE_FILE" ] \
+        || ! grep -q 'idVendor.*391a.*idProduct.*2011' "$RULE_FILE"; then
+        echo "Installing TRYX USB permissions rule..."
+        printf '%s\n' "$RULE" | sudo tee "$RULE_FILE" >/dev/null
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger
+    fi
+fi
 
 echo
-echo "Installed TRYX Display Manager 0.8.18 with source-matched video FPS."
-echo "Pictures use the selected duration. Each video is encoded at a cadence matched to its source, measured by exact frame count, and scheduled with the fixed proven 1.30-second display-start sync."
-echo "No protocol or uploader scripts were replaced."
-echo "Previous GUI files were backed up to:"
-echo "  $BACKUP_DIR"
+echo "TRYX Linux Display Manager installed successfully."
 echo
-echo "Launch:"
-echo "  $HOME/.local/bin/tryx-gui"
+echo "Launch the GUI:"
+echo "  $BIN_DIR/tryx-gui"
 echo
-echo "Check the background single-media loop:"
-echo "  $HOME/.local/bin/tryx-loop --status"
+echo "Run diagnostics:"
+echo "  $BIN_DIR/tryx --doctor"
 echo
-echo "Check the background shuffle:"
-echo "  $HOME/.local/bin/tryx-shuffle --status"
+echo "Shuffle status:"
+echo "  $BIN_DIR/tryx-shuffle --status"
