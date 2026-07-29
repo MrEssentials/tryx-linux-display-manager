@@ -51,8 +51,10 @@ respective owners.
 
 ## Support
 
-Donations are optional and help support development, testing, bug fixes, and
-future Linux compatibility.
+Donations are optional and help support development, testing, bug fixes, and future Linux compatibility.
+
+- [Support development on Ko-fi](https://ko-fi.com/mresessentials)
+- [Donate with PayPal](https://paypal.me/MrEssentials7)
 
 ## License
 
