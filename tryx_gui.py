@@ -61,6 +61,12 @@ SAVED_MEDIA_FILE = CACHE_DIR / "saved-media.json"
 PLAYLIST_MANIFEST = CACHE_DIR / "shuffle-request.json"
 SUPPORT_LINKS_FILE = CACHE_DIR / "support-links.json"
 
+DEFAULT_SUPPORT_LINKS = {
+    "paypal": "https://paypal.me/MrEssentials7",
+    "kofi": "https://ko-fi.com/mresessentials",
+    "github": "",
+}
+
 IMAGE_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff",
 }
@@ -887,7 +893,7 @@ class UploadThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("TRYX Display Manager — Support tab 0.8.19")
+        self.setWindowTitle("TRYX Display Manager — donation links 0.8.20")
         self.resize(1160, 800)
         self.setMinimumSize(920, 680)
 
@@ -1375,15 +1381,15 @@ class MainWindow(QMainWindow):
     def load_support_links(self) -> dict[str, str]:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         if not SUPPORT_LINKS_FILE.exists():
-            return {"paypal": "", "kofi": "", "github": ""}
+            return DEFAULT_SUPPORT_LINKS.copy()
         try:
             data = json.loads(SUPPORT_LINKS_FILE.read_text())
         except (OSError, json.JSONDecodeError):
-            return {"paypal": "", "kofi": "", "github": ""}
+            return DEFAULT_SUPPORT_LINKS.copy()
         return {
-            "paypal": str(data.get("paypal", "")).strip(),
-            "kofi": str(data.get("kofi", "")).strip(),
-            "github": str(data.get("github", "")).strip(),
+            "paypal": str(data.get("paypal", DEFAULT_SUPPORT_LINKS["paypal"])).strip(),
+            "kofi": str(data.get("kofi", DEFAULT_SUPPORT_LINKS["kofi"])).strip(),
+            "github": str(data.get("github", DEFAULT_SUPPORT_LINKS["github"])).strip(),
         }
 
     @staticmethod
