@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a problem with TRYX Linux Display Manager
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping test the app. Please complete the details below.
+
+  - type: input
+    id: distro
+    attributes:
+      label: Linux distribution
+      placeholder: Linux Mint 22.3 Cinnamon
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: TRYX device
+      placeholder: TRYX Turris, USB ID 391a:2011
+    validations:
+      required: true
+
+  - type: dropdown
+    id: media
+    attributes:
+      label: Media type
+      options:
+        - Picture
+        - Video
+        - Mixed shuffle
+        - Application or installation
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Explain what you expected and what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the app
+        2. Add a video
+        3. Start shuffle
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Do not include passwords, private links, or personal information.
+      render: shell
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I am using the latest release.
+          required: true
+        - label: I understand this is unofficial software.
+          required: true

@@ -2,6 +2,8 @@
 
 An unofficial Linux display manager for compatible TRYX Turris LCD displays.
 
+> **Beta software:** Currently tested on Linux Mint with the TRYX Turris USB device `391a:2011`. Other systems and TRYX models may need additional testing.
+
 ## Features
 
 - Upload pictures and videos
