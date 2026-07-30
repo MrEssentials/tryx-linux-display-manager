@@ -893,7 +893,7 @@ class UploadThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("TRYX Display Manager — donation links 0.8.20")
+        self.setWindowTitle("TRYX Display Manager — library controls 0.8.21")
         self.resize(1160, 800)
         self.setMinimumSize(920, 680)
 
@@ -1153,6 +1153,14 @@ class MainWindow(QMainWindow):
         self.selected_label = QLabel("No media selected")
         self.selected_label.setObjectName("muted")
         media_header.addWidget(self.selected_label)
+
+        self.remove_library_button = QPushButton("REMOVE SELECTED")
+        self.remove_library_button.setToolTip(
+            "Remove the selected picture or video from this app. The original file stays on disk."
+        )
+        self.remove_library_button.setEnabled(False)
+        self.remove_library_button.clicked.connect(self.remove_selected_saved_media)
+        media_header.addWidget(self.remove_library_button)
         layout.addLayout(media_header)
 
         self.recent_scroll = QScrollArea()
@@ -1563,6 +1571,7 @@ class MainWindow(QMainWindow):
         self.source = entry.source
         self.kind = entry.kind
         self.set_adjustment_workspace_visible(True)
+        self.update_remove_library_button()
         self.preview.set_pixmap(preview)
         self._loading_playlist_controls = True
         self._suspend_review_updates = True
@@ -1738,6 +1747,74 @@ class MainWindow(QMainWindow):
     def saved_settings_for(self, source: Path) -> dict[str, object] | None:
         return self.saved_media.get(str(source.resolve()))
 
+    def update_remove_library_button(self) -> None:
+        if not hasattr(self, "remove_library_button"):
+            return
+        removable = (
+            self.source is not None
+            and str(self.source.resolve()) in self.saved_media
+        )
+        self.remove_library_button.setEnabled(removable)
+
+    def remove_selected_saved_media(self) -> None:
+        if self.source is None:
+            QMessageBox.information(
+                self,
+                "Select media first",
+                "Click a picture or video in Pictures & Videos, then press Remove Selected.",
+            )
+            return
+
+        source = self.source.resolve()
+        key = str(source)
+        if key not in self.saved_media:
+            QMessageBox.information(
+                self,
+                "Not saved in the library",
+                "This file has not been saved to Pictures & Videos yet.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Remove from Pictures & Videos?",
+            f"Remove {source.name} from this app?\n\n"
+            "The original picture or video file will stay on your computer.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.saved_media.pop(key, None)
+        self.save_saved_media()
+        self.recent_paths = [
+            path for path in self.recent_paths
+            if path.expanduser().resolve() != source
+        ]
+        self.save_recent()
+
+        self.playlist_entries = [
+            entry for entry in self.playlist_entries
+            if entry.source.expanduser().resolve() != source
+        ]
+        self.refresh_playlist_widget()
+        self.refresh_recent_tiles()
+
+        self.source = None
+        self.kind = None
+        self.active_playlist_index = None
+        self.pending_review = False
+        self.confirm_adjust_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.remove_library_button.setEnabled(False)
+        self.set_adjustment_workspace_visible(False)
+        self.selected_label.setText("No media selected")
+        self.status_label.setText(
+            f"Removed {source.name} from Pictures & Videos. The original file was not deleted."
+        )
+        self.status_label.setStyleSheet(f"color:{MUTED};")
+
     def choose_media(self) -> None:
         path_text, _ = QFileDialog.getOpenFileName(
             self,
@@ -1752,7 +1829,9 @@ class MainWindow(QMainWindow):
     def mark_adjustment_pending(self, message: str | None = None) -> None:
         self.pending_review = True
         self.confirm_adjust_button.setEnabled(self.source is not None)
-        self.save_button.setEnabled(False)
+        # Save to Display uses the current preview immediately.
+        # Save Adjustments only stores this framing in Pictures & Videos.
+        self.save_button.setEnabled(self.source is not None)
         if (
             self.active_playlist_index is not None
             and 0 <= self.active_playlist_index < len(self.playlist_entries)
@@ -1780,6 +1859,7 @@ class MainWindow(QMainWindow):
         self.saved_media[str(self.source.resolve())] = settings
         self.save_saved_media()
         self.add_recent(self.source)
+        self.update_remove_library_button()
 
         if (
             self.active_playlist_index is not None
@@ -1822,6 +1902,7 @@ class MainWindow(QMainWindow):
         self.source, self.kind = source, kind
         self.set_adjustment_workspace_visible(True)
         self.preview.set_pixmap(preview)
+        self.update_remove_library_button()
 
         saved = self.saved_settings_for(source)
         self._suspend_review_updates = True
@@ -1865,7 +1946,7 @@ class MainWindow(QMainWindow):
             self.status_label.setStyleSheet(f"color:{ACCENT}; font-weight:700;")
         else:
             self.mark_adjustment_pending(
-                "Adjust the LCD preview, then press Save Adjustments. The editor will close when saved."
+                "Adjust the LCD preview. Save to Display works immediately; Save Adjustments adds it to Pictures & Videos."
             )
 
     def make_preview(self, source: Path, kind: str) -> QPixmap:
@@ -2015,13 +2096,6 @@ class MainWindow(QMainWindow):
     def start_upload(self) -> None:
         if self.source is None or self.kind is None:
             return
-        if self.pending_review:
-            QMessageBox.information(
-                self,
-                "Confirm your framing first",
-                "Adjust the crop/zoom/position if needed, then press Save Adjustments before saving to the display.",
-            )
-            return
         settings = UploadSettings(
             source=self.source,
             kind=self.kind,
@@ -2053,7 +2127,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if success else 0)
-        self.save_button.setEnabled(self.source is not None and not self.pending_review)
+        self.save_button.setEnabled(self.source is not None)
         if success:
             self.status_label.setText("✓  Saved — continuous loop is running")
             self.status_label.setStyleSheet(f"color:{ACCENT}; font-weight:700;")
