@@ -38,3 +38,5 @@ dist/
 .vscode/
 .idea/
 *~
+*.backup-*
+*.before-*
