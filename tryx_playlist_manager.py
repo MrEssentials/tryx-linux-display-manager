@@ -66,8 +66,19 @@ def process_alive(pid: int) -> bool:
 
 
 def is_playlist_process(pid: int) -> bool:
-    target = str(Path(__file__).resolve())
-    return pid != os.getpid() and target in read_cmdline(pid) and "--run" in read_cmdline(pid)
+    if pid == os.getpid():
+        return False
+
+    cmdline = read_cmdline(pid)
+    if "--run" not in cmdline:
+        return False
+
+    # Recognize TRYX shuffle processes even if an older copy was launched
+    # from the development tree and the current manager is the installed copy.
+    return any(
+        Path(argument).name == "tryx_playlist_manager.py"
+        for argument in cmdline
+    )
 
 
 def read_pid() -> int | None:

@@ -2536,6 +2536,7 @@ class MainWindow(QMainWindow):
         self.worker = UploadThread(settings)
         self.worker.log.connect(self.append_log)
         self.worker.completed.connect(self.upload_completed)
+        self.worker.finished.connect(self.upload_thread_finished)
         self.worker.start()
 
     def append_log(self, text: str) -> None:
@@ -2544,10 +2545,12 @@ class MainWindow(QMainWindow):
         bar.setValue(bar.maximum())
 
     def upload_completed(self, success: bool, message: str) -> None:
-        self.worker = None
+        # Do not release self.worker here. The completed signal is emitted
+        # from UploadThread.run() before the QThread has fully finished.
+        # Releasing the final Python reference here can destroy a running
+        # QThread and crash Qt.
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if success else 0)
-        self.save_button.setEnabled(self.source is not None)
         if success:
             self.status_label.setText("✓  Saved — continuous loop is running")
             self.status_label.setStyleSheet(f"color:{ACCENT}; font-weight:700;")
@@ -2557,6 +2560,17 @@ class MainWindow(QMainWindow):
             if not self.log.isVisible():
                 self.toggle_details()
             QMessageBox.critical(self, "Upload failed", message)
+
+    def upload_thread_finished(self) -> None:
+        # QThread.finished means the worker has actually stopped and can now
+        # be released safely.
+        worker = self.worker
+        self.worker = None
+
+        if worker is not None:
+            worker.deleteLater()
+
+        self.save_button.setEnabled(self.source is not None)
 
     def load_recent(self) -> list[Path]:
         # Keep the complete Pictures & Videos library. Older builds limited
