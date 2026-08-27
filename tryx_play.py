@@ -14,7 +14,7 @@ from pathlib import Path
 
 WIDTH = 1280
 HEIGHT = 720
-FPS = 60
+FPS = 30
 BITRATE = "12000k"
 
 APP_DIR = Path(__file__).resolve().parent

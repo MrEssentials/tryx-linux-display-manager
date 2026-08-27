@@ -20,7 +20,7 @@ from typing import Any
 WIDTH = 1280
 HEIGHT = 720
 DEFAULT_FPS = 60
-BITRATE = "12000k"
+BITRATE = "4500k"
 SAVE_DELAY = 2.8
 RESTART_INTERVAL = 2.95
 DISPLAY_START_LATENCY = 1.30
@@ -466,7 +466,8 @@ def prepare_items(data: dict[str, Any], work_dir: Path) -> list[dict[str, Any]]:
                 "-map", "0:v:0", "-an",
                 "-vf", make_filter(item, video=True, target_fps=target_fps),
                 "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "fast",
-                "-b:v", BITRATE, "-profile:v", "main", "-level:v", "4.1",
+                "-b:v", BITRATE, "-maxrate", BITRATE, "-bufsize", "9000k",
+                "-profile:v", "main", "-level:v", "4.1",
                 "-pix_fmt", "yuv420p", "-color_range", "pc",
                 "-color_primaries", "bt709", "-color_trc", "bt709",
                 "-colorspace", "bt709", "-x264-params", x264_parameters,

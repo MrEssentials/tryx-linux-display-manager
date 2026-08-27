@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import usb.core
-from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QColor, QDesktopServices, QDrag, QIcon, QImageReader, QMouseEvent, QPainter, QPixmap, QTransform, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -59,7 +60,16 @@ CACHE_DIR = HOME / ".cache" / "tryx-display-manager"
 RECENT_FILE = CACHE_DIR / "recent.txt"
 SAVED_MEDIA_FILE = CACHE_DIR / "saved-media.json"
 PLAYLIST_MANIFEST = CACHE_DIR / "shuffle-request.json"
+PLAYLIST_STATE_FILE = CACHE_DIR / "playlist-state.json"
 SUPPORT_LINKS_FILE = CACHE_DIR / "support-links.json"
+
+AUTOSTART_DIR = HOME / ".config" / "autostart"
+AUTOSTART_FILE = AUTOSTART_DIR / "tryx-display-manager.desktop"
+
+INSTANCE_SERVER_NAME = f"tryx-display-manager-{HOME.name}"
+
+CONFIG_DIR = HOME / ".config" / "tryx-display-manager"
+AUTO_START_SHUFFLE_FILE = CONFIG_DIR / "auto-start-shuffle"
 
 DEFAULT_SUPPORT_LINKS = {
     "paypal": "https://paypal.me/MrEssentials7",
@@ -893,7 +903,7 @@ class UploadThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("TRYX Display Manager — library controls 0.8.21")
+        self.setWindowTitle("TRYX Display Manager — persistent library & shuffle 0.8.22")
         self.resize(1160, 800)
         self.setMinimumSize(920, 680)
 
@@ -920,7 +930,48 @@ class MainWindow(QMainWindow):
         # actions, so the content now uses the full window width.
         root.addWidget(self.build_content(), 1)
         self.refresh_device_status()
+        self.restore_playlist_state()
         self.refresh_recent_tiles()
+        self.image_duration_combo.currentIndexChanged.connect(
+            self.save_playlist_state
+        )
+        self.shuffle_checkbox.toggled.connect(self.save_playlist_state)
+
+        # A login launch passes --autostart from the desktop entry. Give the
+        # desktop session and TRYX USB display a few seconds to settle before
+        # starting the restored shuffle.
+        if "--autostart" in sys.argv and AUTO_START_SHUFFLE_FILE.is_file():
+            QTimer.singleShot(3500, self.auto_start_saved_shuffle)
+
+    def show_main_window(self) -> None:
+        self.show()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.requestActivate()
+
+    def handle_instance_connection(self) -> None:
+        while self.instance_server.hasPendingConnections():
+            socket = self.instance_server.nextPendingConnection()
+
+            if socket is None:
+                continue
+
+            if socket.bytesAvailable() == 0:
+                socket.waitForReadyRead(500)
+
+            command = bytes(socket.readAll()).decode(
+                "utf-8", errors="ignore"
+            ).strip()
+
+            if command == "show":
+                self.show_main_window()
+
+            socket.disconnectFromServer()
+            socket.deleteLater()
 
     def build_nav(self) -> QFrame:
         nav = QFrame()
@@ -963,8 +1014,204 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
         tabs.addTab(self.build_display_page(), "DISPLAY")
+        tabs.addTab(self.build_settings_page(), "SETTINGS")
         tabs.addTab(self.build_support_page(), "SUPPORT")
         return tabs
+
+    def build_settings_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 22, 28, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("SETTINGS")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        startup_card = QFrame()
+        startup_card.setObjectName("card")
+        card_layout = QVBoxLayout(startup_card)
+        card_layout.setContentsMargins(18, 18, 18, 18)
+        card_layout.setSpacing(10)
+
+        startup_title = QLabel("STARTUP")
+        startup_title.setStyleSheet("font-weight:800;")
+        card_layout.addWidget(startup_title)
+
+        startup_description = QLabel(
+            "Automatically open TRYX Display Manager when you log in to Linux."
+        )
+        startup_description.setObjectName("muted")
+        startup_description.setWordWrap(True)
+        card_layout.addWidget(startup_description)
+
+        self.autostart_checkbox = QCheckBox("Launch TRYX on login")
+        self.autostart_checkbox.setChecked(AUTOSTART_FILE.is_file())
+        self.autostart_checkbox.toggled.connect(self.set_autostart_enabled)
+        card_layout.addWidget(self.autostart_checkbox)
+
+        self.auto_start_shuffle_checkbox = QCheckBox(
+            "Start saved shuffle after login"
+        )
+        self.auto_start_shuffle_checkbox.setChecked(
+            AUTO_START_SHUFFLE_FILE.is_file()
+        )
+        self.auto_start_shuffle_checkbox.toggled.connect(
+            self.set_auto_start_shuffle_enabled
+        )
+        card_layout.addWidget(self.auto_start_shuffle_checkbox)
+
+        self.autostart_status_label = QLabel()
+        self.autostart_status_label.setObjectName("muted")
+        card_layout.addWidget(self.autostart_status_label)
+        self.update_autostart_status()
+
+        layout.addWidget(startup_card)
+        layout.addStretch()
+
+        return page
+
+    def update_autostart_status(self) -> None:
+        if not hasattr(self, "autostart_status_label"):
+            return
+
+        launch_enabled = AUTOSTART_FILE.is_file()
+
+        if launch_enabled:
+            if AUTO_START_SHUFFLE_FILE.is_file():
+                self.autostart_status_label.setText(
+                    "✓ TRYX will launch and start the saved shuffle when you log in."
+                )
+            else:
+                self.autostart_status_label.setText(
+                    "✓ TRYX will launch automatically when you log in."
+                )
+            self.autostart_status_label.setStyleSheet(
+                f"color:{ACCENT}; font-weight:700;"
+            )
+        else:
+            self.autostart_status_label.setText(
+                "TRYX will not launch automatically."
+            )
+            self.autostart_status_label.setStyleSheet("")
+
+        if hasattr(self, "auto_start_shuffle_checkbox"):
+            self.auto_start_shuffle_checkbox.setEnabled(launch_enabled)
+
+    def set_autostart_enabled(self, enabled: bool) -> None:
+        try:
+            if enabled:
+                AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+
+                # Keep the virtual-environment executable path intact.
+                # Do not use Path.resolve() here because .venv/bin/python3 is
+                # normally a symlink to the system Python executable.
+                python_executable = sys.executable
+                gui_script = str(Path(__file__).resolve())
+                app_directory = str(APP_DIR)
+
+                desktop_entry = (
+                    "[Desktop Entry]\n"
+                    "Type=Application\n"
+                    "Version=1.0\n"
+                    "Name=TRYX Display Manager\n"
+                    "Comment=Start TRYX Display Manager when you log in\n"
+                    f'Exec="{python_executable}" "{gui_script}" --autostart\n'
+                    f"Path={app_directory}\n"
+                    "Terminal=false\n"
+                    "StartupNotify=false\n"
+                    "X-GNOME-Autostart-enabled=true\n"
+                )
+
+                AUTOSTART_FILE.write_text(desktop_entry, encoding="utf-8")
+                AUTOSTART_FILE.chmod(0o755)
+
+            else:
+                AUTOSTART_FILE.unlink(missing_ok=True)
+                AUTO_START_SHUFFLE_FILE.unlink(missing_ok=True)
+
+                if hasattr(self, "auto_start_shuffle_checkbox"):
+                    self.auto_start_shuffle_checkbox.blockSignals(True)
+                    self.auto_start_shuffle_checkbox.setChecked(False)
+                    self.auto_start_shuffle_checkbox.blockSignals(False)
+
+        except OSError as exc:
+            self.autostart_checkbox.blockSignals(True)
+            self.autostart_checkbox.setChecked(AUTOSTART_FILE.is_file())
+            self.autostart_checkbox.blockSignals(False)
+
+            QMessageBox.critical(
+                self,
+                "Startup setting failed",
+                f"Could not change the startup setting:\n\n{exc}",
+            )
+
+        self.update_autostart_status()
+
+    def set_auto_start_shuffle_enabled(self, enabled: bool) -> None:
+        try:
+            if enabled:
+                if not AUTOSTART_FILE.is_file():
+                    self.auto_start_shuffle_checkbox.blockSignals(True)
+                    self.auto_start_shuffle_checkbox.setChecked(False)
+                    self.auto_start_shuffle_checkbox.blockSignals(False)
+                    return
+
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                AUTO_START_SHUFFLE_FILE.write_text(
+                    "enabled\n",
+                    encoding="utf-8",
+                )
+            else:
+                AUTO_START_SHUFFLE_FILE.unlink(missing_ok=True)
+
+        except OSError as exc:
+            self.auto_start_shuffle_checkbox.blockSignals(True)
+            self.auto_start_shuffle_checkbox.setChecked(
+                AUTO_START_SHUFFLE_FILE.is_file()
+            )
+            self.auto_start_shuffle_checkbox.blockSignals(False)
+
+            QMessageBox.critical(
+                self,
+                "Automatic shuffle setting failed",
+                f"Could not change the automatic shuffle setting:\n\n{exc}",
+            )
+
+        self.update_autostart_status()
+
+    def auto_start_saved_shuffle(self) -> None:
+        # Only run automatically when this instance came from the Linux
+        # autostart entry. Normal manual launches remain unchanged.
+        if "--autostart" not in sys.argv:
+            return
+
+        if not AUTO_START_SHUFFLE_FILE.is_file():
+            return
+
+        if not self.playlist_entries:
+            self.status_label.setText(
+                "TRYX started automatically — saved shuffle is empty."
+            )
+            self.status_label.setStyleSheet("color:#FFCC66; font-weight:700;")
+            return
+
+        # Avoid opening adjustment dialogs unattended during login.
+        if any(not entry.framing_saved for entry in self.playlist_entries):
+            self.status_label.setText(
+                "TRYX started automatically — shuffle needs saved adjustments first."
+            )
+            self.status_label.setStyleSheet("color:#FFCC66; font-weight:700;")
+            return
+
+        self.status_label.setText(
+            "TRYX started automatically — starting saved shuffle…"
+        )
+        self.status_label.setStyleSheet(
+            f"color:{ACCENT}; font-weight:700;"
+        )
+
+        self.start_shuffle()
 
     def build_display_page(self) -> QWidget:
         page = QWidget()
@@ -1456,6 +1703,162 @@ class MainWindow(QMainWindow):
             self.device_label.setText("●  TRYX not detected")
             self.device_label.setStyleSheet("color:#FF8C8C; font-weight:700;")
 
+    def save_playlist_state(self, *_args) -> None:
+        # Persist shuffle membership, order, timing, and saved framing.
+        if not hasattr(self, "playlist_entries"):
+            return
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+        seconds = 7
+        if hasattr(self, "image_duration_combo"):
+            value = self.image_duration_combo.currentData()
+            if value is not None:
+                seconds = int(value)
+
+        shuffle_enabled = True
+        if hasattr(self, "shuffle_checkbox"):
+            shuffle_enabled = bool(self.shuffle_checkbox.isChecked())
+
+        items: list[dict[str, object]] = []
+        for entry in self.playlist_entries:
+            item = entry.to_manifest()
+            item["framing_saved"] = bool(entry.framing_saved)
+            items.append(item)
+
+        state = {
+            "image_seconds": seconds,
+            "shuffle": shuffle_enabled,
+            "items": items,
+        }
+        PLAYLIST_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+    def restore_playlist_state(self) -> None:
+        # Restore the last playlist. Older successful shuffle-request.json files
+        # are migrated automatically.
+        state_path: Path | None = None
+        legacy_manifest = False
+
+        if PLAYLIST_STATE_FILE.exists():
+            state_path = PLAYLIST_STATE_FILE
+        elif PLAYLIST_MANIFEST.exists():
+            state_path = PLAYLIST_MANIFEST
+            legacy_manifest = True
+
+        if state_path is None:
+            self.refresh_playlist_widget()
+            return
+
+        try:
+            data = json.loads(state_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            self.refresh_playlist_widget()
+            return
+
+        if not isinstance(data, dict):
+            self.refresh_playlist_widget()
+            return
+
+        raw_items = data.get("items", [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+
+        restored: list[PlaylistEntry] = []
+        library_changed = False
+
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+
+            raw_source = raw.get("source")
+            if not raw_source:
+                continue
+
+            source = Path(str(raw_source)).expanduser().resolve()
+            if not source.is_file():
+                continue
+
+            try:
+                kind = detect_kind(source)
+            except RuntimeError:
+                continue
+
+            entry = PlaylistEntry(source=source, kind=kind)
+            saved = self.saved_settings_for(source)
+
+            if saved is not None:
+                entry.fit = str(saved.get("fit", "crop"))
+                entry.zoom = float(saved.get("zoom", 1.0))
+                entry.anchor_x = float(saved.get("anchor_x", 0.5))
+                entry.anchor_y = float(saved.get("anchor_y", 0.5))
+                entry.rotation = int(saved.get("rotation", 0))
+                entry.framing_saved = True
+            else:
+                entry.fit = str(raw.get("fit", "crop"))
+                entry.zoom = float(raw.get("zoom", 1.0))
+                entry.anchor_x = float(raw.get("anchor_x", 0.5))
+                entry.anchor_y = float(raw.get("anchor_y", 0.5))
+                entry.rotation = int(raw.get("rotation", 0))
+                entry.framing_saved = (
+                    True
+                    if legacy_manifest
+                    else bool(raw.get("framing_saved", False))
+                )
+
+                if entry.framing_saved:
+                    self.saved_media[str(source)] = {
+                        "kind": kind,
+                        "fit": entry.fit,
+                        "zoom": entry.zoom,
+                        "anchor_x": entry.anchor_x,
+                        "anchor_y": entry.anchor_y,
+                        "rotation": entry.rotation,
+                    }
+                    library_changed = True
+
+            restored.append(entry)
+
+            # An already-adjusted shuffle item should also stay visible in the
+            # Pictures & Videos row.
+            if entry.framing_saved and source not in self.recent_paths:
+                self.recent_paths.append(source)
+                library_changed = True
+
+        self.playlist_entries = restored
+
+        try:
+            seconds = int(data.get("image_seconds", 7))
+        except (TypeError, ValueError):
+            seconds = 7
+
+        for index in range(self.image_duration_combo.count()):
+            if int(self.image_duration_combo.itemData(index)) == seconds:
+                self.image_duration_combo.setCurrentIndex(index)
+                break
+
+        self.shuffle_checkbox.setChecked(bool(data.get("shuffle", True)))
+        self.refresh_playlist_widget()
+
+        # Do not force the adjustment editor open merely because a saved
+        # playlist was restored.
+        self.playlist_widget.blockSignals(True)
+        self.playlist_widget.setCurrentRow(-1)
+        self.playlist_widget.clearSelection()
+        self.playlist_widget.blockSignals(False)
+        self.active_playlist_index = None
+        self.source = None
+        self.kind = None
+        self.set_adjustment_workspace_visible(False)
+        self.selected_label.setText("No media selected")
+
+        if library_changed:
+            self.save_saved_media()
+            self.save_recent()
+
+        # Convert an older successful shuffle manifest to the new persistent
+        # state format on first launch.
+        self.save_playlist_state()
+
     def choose_playlist_media(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
@@ -1506,6 +1909,7 @@ class MainWindow(QMainWindow):
             existing.add(source)
 
         self.refresh_playlist_widget()
+        self.save_playlist_state()
         if first_new is not None:
             self.playlist_widget.setCurrentRow(first_new)
         if rejected:
@@ -1615,6 +2019,7 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(self.playlist_entries):
             self.playlist_entries.pop(row)
             self.refresh_playlist_widget()
+            self.save_playlist_state()
 
     def clear_playlist(self) -> None:
         self.playlist_entries.clear()
@@ -1622,6 +2027,7 @@ class MainWindow(QMainWindow):
         self.active_playlist_index = None
         self.playlist_count_label.setText("0 items")
         self.start_shuffle_button.setEnabled(False)
+        self.save_playlist_state()
 
     def start_shuffle(self) -> None:
         if not self.playlist_entries:
@@ -1652,6 +2058,7 @@ class MainWindow(QMainWindow):
             return
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.save_playlist_state()
         manifest = {
             "image_seconds": int(self.image_duration_combo.currentData()),
             "shuffle": self.shuffle_checkbox.isChecked(),
@@ -1799,6 +2206,7 @@ class MainWindow(QMainWindow):
             if entry.source.expanduser().resolve() != source
         ]
         self.refresh_playlist_widget()
+        self.save_playlist_state()
         self.refresh_recent_tiles()
 
         self.source = None
@@ -1869,6 +2277,18 @@ class MainWindow(QMainWindow):
             entry.framing_saved = True
             self.update_playlist_item_label(self.active_playlist_index)
 
+        for index, playlist_entry in enumerate(self.playlist_entries):
+            if playlist_entry.source.expanduser().resolve() != self.source.resolve():
+                continue
+            playlist_entry.fit = str(settings["fit"])
+            playlist_entry.zoom = float(settings["zoom"])
+            playlist_entry.anchor_x = float(settings["anchor_x"])
+            playlist_entry.anchor_y = float(settings["anchor_y"])
+            playlist_entry.rotation = int(settings["rotation"])
+            playlist_entry.framing_saved = True
+            self.update_playlist_item_label(index)
+
+        self.save_playlist_state()
         saved_name = self.source.name
         self.pending_review = False
         self.confirm_adjust_button.setEnabled(False)
@@ -2139,27 +2559,44 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Upload failed", message)
 
     def load_recent(self) -> list[Path]:
+        # Keep the complete Pictures & Videos library. Older builds limited
+        # recent.txt to eight paths, so recover the rest from saved-media.json.
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        if not RECENT_FILE.exists():
-            return []
         paths: list[Path] = []
-        for line in RECENT_FILE.read_text(errors="ignore").splitlines():
-            path = Path(line).expanduser().resolve()
-            if path.is_file() and str(path) in self.saved_media:
-                paths.append(path)
-        return paths[:8]
+        seen: set[Path] = set()
 
+        if RECENT_FILE.exists():
+            for line in RECENT_FILE.read_text(errors="ignore").splitlines():
+                path = Path(line).expanduser().resolve()
+                if (
+                    path.is_file()
+                    and str(path) in self.saved_media
+                    and path not in seen
+                ):
+                    paths.append(path)
+                    seen.add(path)
+
+        for raw_path in self.saved_media:
+            path = Path(raw_path).expanduser().resolve()
+            if path.is_file() and path not in seen:
+                paths.append(path)
+                seen.add(path)
+
+        return paths
     def save_recent(self) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         RECENT_FILE.write_text("\n".join(str(p) for p in self.recent_paths))
 
     def add_recent(self, path: Path) -> None:
-        self.recent_paths = [p for p in self.recent_paths if p != path]
+        path = path.expanduser().resolve()
+        self.recent_paths = [
+            existing
+            for existing in self.recent_paths
+            if existing.expanduser().resolve() != path
+        ]
         self.recent_paths.insert(0, path)
-        self.recent_paths = self.recent_paths[:8]
         self.save_recent()
         self.refresh_recent_tiles()
-
     def refresh_recent_tiles(self) -> None:
         while self.recent_layout.count():
             item = self.recent_layout.takeAt(0)
@@ -2185,10 +2622,24 @@ class MainWindow(QMainWindow):
         self.library_title.setText(f"Pictures & Videos ({count})")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.save_playlist_state()
+
         if self.worker and self.worker.isRunning():
-            QMessageBox.warning(self, "Upload in progress", "Wait for the upload to finish before closing the app.")
+            QMessageBox.warning(
+                self,
+                "Upload in progress",
+                "Wait for the upload to finish before closing the app.",
+            )
             event.ignore()
             return
+
+        # The login instance is TRYX's background process.
+        # Closing its visible window returns it to the background.
+        if "--autostart" in sys.argv:
+            self.hide()
+            event.ignore()
+            return
+
         self.preview_temp.cleanup()
         event.accept()
 
@@ -2197,8 +2648,51 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("TRYX Display Manager")
     app.setStyleSheet(APP_STYLE)
+
+    background_launch = "--autostart" in sys.argv
+
+    # The login instance remains alive even while it has no visible window.
+    if background_launch:
+        app.setQuitOnLastWindowClosed(False)
+
+    # Ask an existing TRYX instance whether it is already running.
+    probe = QLocalSocket()
+    probe.connectToServer(INSTANCE_SERVER_NAME)
+
+    if probe.waitForConnected(500):
+        # Normal launches tell the existing background copy to open its window.
+        if not background_launch:
+            probe.write(b"show")
+            probe.flush()
+            probe.waitForBytesWritten(500)
+
+        probe.disconnectFromServer()
+        return 0
+
+    # Remove a stale socket left by a crash or forced shutdown.
+    QLocalServer.removeServer(INSTANCE_SERVER_NAME)
+
     window = MainWindow()
-    window.show()
+
+    window.instance_server = QLocalServer(window)
+
+    if not window.instance_server.listen(INSTANCE_SERVER_NAME):
+        QMessageBox.critical(
+            window,
+            "TRYX startup failed",
+            "Could not create the TRYX single-instance connection.",
+        )
+        return 1
+
+    window.instance_server.newConnection.connect(
+        window.handle_instance_connection
+    )
+
+    # Login = hidden.
+    # Normal manual launch = visible.
+    if not background_launch:
+        window.show_main_window()
+
     return app.exec()
 
 
